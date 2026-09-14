@@ -130,7 +130,7 @@ exports.onMemoryPhotoAdded = onValueUpdated(
   }
 );
 
-// Neuer Bucket-Traum ODER neuer (nachgetragener) Meilenstein
+// Neue Date-Idee, neuer Bucket-Traum ODER neuer (nachgetragener) Meilenstein
 exports.onWishCreated = onValueCreated(
   { ref: "/wishes/{wishId}", region: REGION },
   async (event) => {
@@ -138,26 +138,31 @@ exports.onWishCreated = onValueCreated(
     if (!wish || !wish.by || !wish.text) return;
 
     const partner = otherUser(wish.by);
+    const isSecret = wish.surprise === true;
 
-    if (wish.isBucket === true && wish.status === "open") {
+    if (wish.isBucket === true && wish.status !== "done") {
       await sendToUser(
         partner,
         "✨ Neuer Bucket-Traum",
-        `${wish.by} hat "${wish.text}" auf die Bucket-List gesetzt.`,
+        isSecret
+          ? `${wish.by} hat einen geheimen Bucket-Traum hinzugefügt 🤫`
+          : `${wish.by} hat "${wish.text}" auf die Bucket-List gesetzt.`,
         "bucket-new"
       );
-    } else if (wish.isBucket === false && wish.status === "done") {
+    } else if (wish.status === "done") {
       await sendToUser(
         partner,
         "🏆 Neuer Meilenstein",
         `${wish.by} hat "${wish.text}" nachgetragen.`,
         "milestone-new"
       );
-    } else if (wish.isBucket === undefined && wish.status === undefined) {
+    } else {
       await sendToUser(
         partner,
-        "💡 Neue Date-Idee",
-        `${wish.by} hat "${wish.text}" vorgeschlagen.`,
+        isSecret ? "🤫 Neue geheime Date-Idee" : "💡 Neue Date-Idee",
+        isSecret
+          ? `${wish.by} hat eine Überraschung vorbereitet... lass dich überraschen!`
+          : `${wish.by} hat "${wish.text}" vorgeschlagen.`,
         "idea-new"
       );
     }
