@@ -1,4 +1,5 @@
 const { onValueCreated, onValueUpdated } = require("firebase-functions/v2/database");
+const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { initializeApp } = require("firebase-admin/app");
 const { getDatabase } = require("firebase-admin/database");
 const { getMessaging } = require("firebase-admin/messaging");
@@ -6,6 +7,8 @@ const { getMessaging } = require("firebase-admin/messaging");
 initializeApp();
 
 const REGION = "europe-west1";
+const TIMEZONE = "Europe/Berlin";
+const USERS = ["Samet", "Meriam"];
 
 function otherUser(name) {
   return name === "Samet" ? "Meriam" : "Samet";
@@ -47,7 +50,15 @@ async function sendToUser(partner, title, body, tag) {
   );
 }
 
-// --- 1) Love-Letter / Post-it ---
+async function sendToBoth(title, body, tag) {
+  await Promise.all(USERS.map((u) => sendToUser(u, title, body, tag)));
+}
+
+// ============================================================
+// PHASE 1 — Reaktive Trigger (feuern bei konkreten Aktionen)
+// ============================================================
+
+// Love-Letter / Post-it
 exports.onLoveLetterCreated = onValueCreated(
   { ref: "/loveLetters/{pushId}", region: REGION },
   async (event) => {
@@ -64,7 +75,7 @@ exports.onLoveLetterCreated = onValueCreated(
   }
 );
 
-// --- 2) Milestone-Kommentar ---
+// Milestone-Kommentar
 exports.onWishCommentCreated = onValueCreated(
   { ref: "/wishes/{wishId}/comments/{commentId}", region: REGION },
   async (event) => {
@@ -86,15 +97,22 @@ exports.onWishCommentCreated = onValueCreated(
   }
 );
 
-// --- 3) Neues Foto/Memory hochgeladen ---
+// Neues Foto hinzugefügt ODER ein bestehendes Foto ersetzt
 exports.onMemoryPhotoAdded = onValueUpdated(
   { ref: "/wishes/{wishId}/memoryPhotos", region: REGION },
   async (event) => {
     const before = event.data.before.val();
     const after = event.data.after.val();
-    const beforeLen = Array.isArray(before) ? before.length : 0;
-    const afterLen = Array.isArray(after) ? after.length : 0;
-    if (afterLen <= beforeLen) return;
+    const beforeArr = Array.isArray(before) ? before : [];
+    const afterArr = Array.isArray(after) ? after : [];
+    if (afterArr.length === 0) return;
+
+    const grew = afterArr.length > beforeArr.length;
+    const replaced =
+      !grew &&
+      afterArr.length === beforeArr.length &&
+      JSON.stringify(afterArr) !== JSON.stringify(beforeArr);
+    if (!grew && !replaced) return;
 
     const wishId = event.params.wishId;
     const db = getDatabase();
@@ -105,14 +123,42 @@ exports.onMemoryPhotoAdded = onValueUpdated(
     const partner = otherUser(wish.by);
     await sendToUser(
       partner,
-      "📸 Neues Foto hinzugefügt",
-      `Bei "${wish.text || "eurem Moment"}" ist ein neues Foto aufgetaucht.`,
+      grew ? "📸 Neues Foto hinzugefügt" : "📸 Foto aktualisiert",
+      `Bei "${wish.text || "eurem Moment"}" gibt's was Neues zu sehen.`,
       "memory-photo"
     );
   }
 );
 
-// --- 4) Bucket-List-Punkt erledigt ---
+// Neuer Bucket-Traum ODER neuer (nachgetragener) Meilenstein
+exports.onWishCreated = onValueCreated(
+  { ref: "/wishes/{wishId}", region: REGION },
+  async (event) => {
+    const wish = event.data.val();
+    if (!wish || !wish.by || !wish.text) return;
+
+    const partner = otherUser(wish.by);
+
+    if (wish.isBucket === true && wish.status === "open") {
+      await sendToUser(
+        partner,
+        "✨ Neuer Bucket-Traum",
+        `${wish.by} hat "${wish.text}" auf die Bucket-List gesetzt.`,
+        "bucket-new"
+      );
+    } else if (wish.isBucket === false && wish.status === "done") {
+      await sendToUser(
+        partner,
+        "🏆 Neuer Meilenstein",
+        `${wish.by} hat "${wish.text}" nachgetragen.`,
+        "milestone-new"
+      );
+    }
+    // reine Date-Ideen (ohne isBucket/status) bleiben bewusst still — zu häufig für eine Notification
+  }
+);
+
+// Bestehender Bucket-Traum wird abgehakt
 exports.onBucketItemDone = onValueUpdated(
   { ref: "/wishes/{wishId}/status", region: REGION },
   async (event) => {
@@ -136,7 +182,7 @@ exports.onBucketItemDone = onValueUpdated(
   }
 );
 
-// --- 5) Quiz-Herausforderung gestartet ---
+// Quiz-Herausforderung gestartet
 exports.onQuizCreated = onValueCreated(
   { ref: "/quiz/{quizId}", region: REGION },
   async (event) => {
@@ -150,5 +196,81 @@ exports.onQuizCreated = onValueCreated(
       truncate(quiz.q, 100),
       "quiz-challenge"
     );
+  }
+);
+
+// Quiz beantwortet -> Ersteller bekommt Rückmeldung
+exports.onQuizAnswered = onValueUpdated(
+  { ref: "/quiz/{quizId}/status", region: REGION },
+  async (event) => {
+    const before = event.data.before.val();
+    const after = event.data.after.val();
+    if (after !== "answered" || before === "answered") return;
+
+    const quizId = event.params.quizId;
+    const db = getDatabase();
+    const quizSnap = await db.ref(`quiz/${quizId}`).get();
+    const quiz = quizSnap.val();
+    if (!quiz || !quiz.by || !quiz.answerBy) return;
+
+    await sendToUser(
+      quiz.by,
+      `🎯 ${quiz.answerBy} hat geantwortet`,
+      `Dein Quiz "${truncate(quiz.q || "", 60)}" wurde beantwortet.`,
+      "quiz-answered"
+    );
+  }
+);
+
+// ============================================================
+// PHASE 2 — Zeitgesteuert (läuft einmal täglich, bewusst dezent)
+// ============================================================
+
+exports.dailyDigest = onSchedule(
+  { schedule: "every day 09:00", timeZone: TIMEZONE, region: REGION },
+  async () => {
+    const db = getDatabase();
+    const now = new Date();
+    const todayMonth = now.getMonth();
+    const todayDate = now.getDate();
+    const todayYear = now.getFullYear();
+
+    // --- "On this day": abgeschlossene Meilensteine an einem früheren Jahrestag ---
+    const wishesSnap = await db.ref("wishes").get();
+    const wishes = wishesSnap.val() || {};
+    for (const id of Object.keys(wishes)) {
+      const w = wishes[id];
+      if (!w || !w.doneAt || !w.text) continue;
+      const d = new Date(w.doneAt);
+      if (d.getMonth() !== todayMonth || d.getDate() !== todayDate) continue;
+      const yearsAgo = todayYear - d.getFullYear();
+      if (yearsAgo <= 0) continue;
+
+      const label = yearsAgo === 1 ? "vor einem Jahr" : `vor ${yearsAgo} Jahren`;
+      await sendToBoth(
+        "📅 Erinnerung",
+        `${label}: "${w.text}" ❤️`,
+        "on-this-day"
+      );
+    }
+
+    // --- Countdown, der morgen fällig ist ---
+    const countdownSnap = await db.ref("countdown/current").get();
+    const countdown = countdownSnap.val();
+    if (countdown && countdown.target && countdown.title) {
+      const target = new Date(countdown.target);
+      const isTomorrow =
+        target.getFullYear() === now.getFullYear() &&
+        target.getMonth() === now.getMonth() &&
+        target.getDate() === now.getDate() + 1;
+
+      if (isTomorrow) {
+        await sendToBoth(
+          "⏰ Morgen ist es soweit",
+          `"${countdown.title}" ❤️`,
+          "countdown-soon"
+        );
+      }
+    }
   }
 );
