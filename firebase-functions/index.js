@@ -3,6 +3,7 @@ const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { initializeApp } = require("firebase-admin/app");
 const { getDatabase } = require("firebase-admin/database");
 const { getMessaging } = require("firebase-admin/messaging");
+const { getStorage } = require("firebase-admin/storage");
 
 initializeApp();
 
@@ -395,5 +396,31 @@ exports.dailyDigest = onSchedule(
         );
       }
     }
+  }
+);
+
+// --- Wöchentliches Backup ---
+// Exportiert die komplette Datenbank (Wünsche, Wunschliste, Coupons, Kalender, Quiz, Love-Letters, ...)
+// als JSON nach Cloud Storage. Fotos/Sprachnachrichten selbst liegen schon in Storage und werden
+// hier nicht dupliziert, nur die Datenbank-Metadaten (inkl. der URLs dorthin).
+exports.weeklyBackup = onSchedule(
+  { schedule: "every monday 04:00", timeZone: TIMEZONE, region: REGION },
+  async () => {
+    const db = getDatabase();
+    const snap = await db.ref("/").get();
+    const data = snap.val() || {};
+
+    const dateStr = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    const fileName = `backups/mersam-os-${dateStr}.json`;
+
+    const bucket = getStorage().bucket();
+    await bucket.file(fileName).save(JSON.stringify(data), {
+      contentType: "application/json",
+    });
+
+    // Nur die letzten 8 Backups behalten, ältere aufräumen
+    const [files] = await bucket.getFiles({ prefix: "backups/" });
+    const sorted = files.sort((a, b) => (a.name < b.name ? 1 : -1));
+    await Promise.all(sorted.slice(8).map((f) => f.delete().catch(() => {})));
   }
 );
