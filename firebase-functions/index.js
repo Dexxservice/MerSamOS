@@ -193,6 +193,23 @@ exports.onBucketItemDone = onValueUpdated(
   }
 );
 
+// Neuer Wunschliste-Eintrag (Geschenkidee)
+exports.onGiftWishCreated = onValueCreated(
+  { ref: "/giftWishes/{wishId}", region: REGION },
+  async (event) => {
+    const wish = event.data.val();
+    if (!wish || !wish.by || !wish.text) return;
+
+    const partner = otherUser(wish.by);
+    await sendToUser(
+      partner,
+      "🎁 Neuer Wunsch",
+      `${wish.by} wünscht sich: "${truncate(wish.text, 80)}"`,
+      "gift-wish-new"
+    );
+  }
+);
+
 // Quiz-Herausforderung gestartet
 exports.onQuizCreated = onValueCreated(
   { ref: "/quiz/{quizId}", region: REGION },
