@@ -214,6 +214,28 @@ exports.onGiftWishCreated = onValueCreated(
   }
 );
 
+// Neuer Kalendertermin
+exports.onCalendarEventCreated = onValueCreated(
+  { ref: "/calendarEvents/{eventId}", region: REGION },
+  async (event) => {
+    const ev = event.data.val();
+    if (!ev || !ev.by || !ev.title) return;
+
+    const partner = otherUser(ev.by);
+    const dateLabel = new Date(ev.date + "T00:00:00").toLocaleDateString("de-DE", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    });
+    await sendToUser(
+      partner,
+      "📅 Neuer Termin",
+      `${ev.by} hat "${truncate(ev.title, 60)}" am ${dateLabel} eingetragen${ev.recurring ? " (jährlich)" : ""}`,
+      "calendar-event-new"
+    );
+  }
+);
+
 // Neuer Liebes-Coupon
 exports.onLoveCouponCreated = onValueCreated(
   { ref: "/loveCoupons/{couponId}", region: REGION },
@@ -343,21 +365,33 @@ exports.dailyDigest = onSchedule(
       );
     }
 
-    // --- Countdown, der morgen fällig ist ---
-    const countdownSnap = await db.ref("countdown/current").get();
-    const countdown = countdownSnap.val();
-    if (countdown && countdown.target && countdown.title) {
-      const target = new Date(countdown.target);
-      const isTomorrow =
-        target.getFullYear() === now.getFullYear() &&
-        target.getMonth() === now.getMonth() &&
-        target.getDate() === now.getDate() + 1;
+    // --- Kalendertermine, die morgen fällig sind (inkl. jährlich wiederkehrender) ---
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    const eventsSnap = await db.ref("calendarEvents").get();
+    const events = eventsSnap.val() || {};
+    for (const id of Object.keys(events)) {
+      const ev = events[id];
+      if (!ev || !ev.date || !ev.title) continue;
+      const [, m, d] = ev.date.split("-").map(Number);
+
+      const isTomorrow = ev.recurring
+        ? m - 1 === tomorrow.getMonth() && d === tomorrow.getDate()
+        : (() => {
+            const target = new Date(ev.date + "T00:00:00");
+            return (
+              target.getFullYear() === tomorrow.getFullYear() &&
+              target.getMonth() === tomorrow.getMonth() &&
+              target.getDate() === tomorrow.getDate()
+            );
+          })();
 
       if (isTomorrow) {
         await sendToBoth(
           "⏰ Morgen ist es soweit",
-          `"${countdown.title}" ❤️`,
-          "countdown-soon"
+          `"${ev.title}" ❤️`,
+          "calendar-event-soon"
         );
       }
     }
