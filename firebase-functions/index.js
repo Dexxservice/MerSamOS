@@ -153,8 +153,14 @@ exports.onWishCreated = onValueCreated(
         `${wish.by} hat "${wish.text}" nachgetragen.`,
         "milestone-new"
       );
+    } else if (wish.isBucket === undefined && wish.status === undefined) {
+      await sendToUser(
+        partner,
+        "💡 Neue Date-Idee",
+        `${wish.by} hat "${wish.text}" vorgeschlagen.`,
+        "idea-new"
+      );
     }
-    // reine Date-Ideen (ohne isBucket/status) bleiben bewusst still — zu häufig für eine Notification
   }
 );
 
