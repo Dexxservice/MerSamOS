@@ -1,4 +1,4 @@
-const { onValueCreated, onValueUpdated } = require("firebase-functions/v2/database");
+const { onValueCreated, onValueUpdated, onValueWritten } = require("firebase-functions/v2/database");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { initializeApp } = require("firebase-admin/app");
 const { getDatabase } = require("firebase-admin/database");
@@ -210,6 +210,63 @@ exports.onGiftWishCreated = onValueCreated(
       "🎁 Neuer Wunsch",
       `${wish.by} wünscht sich: "${truncate(wish.text, 80)}"`,
       "gift-wish-new"
+    );
+  }
+);
+
+// Neuer Liebes-Coupon
+exports.onLoveCouponCreated = onValueCreated(
+  { ref: "/loveCoupons/{couponId}", region: REGION },
+  async (event) => {
+    const coupon = event.data.val();
+    if (!coupon || !coupon.by || !coupon.title) return;
+
+    const partner = otherUser(coupon.by);
+    await sendToUser(
+      partner,
+      "💝 Neuer Liebes-Coupon",
+      `${coupon.by} hat dir "${truncate(coupon.title, 80)}" geschenkt`,
+      "coupon-new"
+    );
+  }
+);
+
+// Liebes-Coupon eingelöst -> Ersteller bekommt Rückmeldung
+exports.onLoveCouponRedeemed = onValueUpdated(
+  { ref: "/loveCoupons/{couponId}/redeemed", region: REGION },
+  async (event) => {
+    const before = event.data.before.val();
+    const after = event.data.after.val();
+    if (after !== true || before === true) return;
+
+    const couponId = event.params.couponId;
+    const db = getDatabase();
+    const couponSnap = await db.ref(`loveCoupons/${couponId}`).get();
+    const coupon = couponSnap.val();
+    if (!coupon || !coupon.by) return;
+
+    await sendToUser(
+      coupon.by,
+      "🎉 Coupon eingelöst",
+      `${otherUser(coupon.by)} hat "${truncate(coupon.title || "", 80)}" eingelöst!`,
+      "coupon-redeemed"
+    );
+  }
+);
+
+// Neue Runde "Gleichzeitig antworten" (set() überschreibt den Knoten bei jeder neuen Runde -> onValueWritten statt onValueCreated)
+exports.onSyncQuizRoundCreated = onValueWritten(
+  { ref: "/syncQuiz/current", region: REGION },
+  async (event) => {
+    const round = event.data.after.val();
+    if (!round || !round.startedBy || !round.question) return;
+
+    const partner = otherUser(round.startedBy);
+    await sendToUser(
+      partner,
+      "🤝 Neue Runde: Gleichzeitig antworten",
+      truncate(round.question, 100),
+      "syncquiz-new"
     );
   }
 );
