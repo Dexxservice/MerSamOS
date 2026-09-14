@@ -80,7 +80,7 @@ exports.onWishCommentCreated = onValueCreated(
   { ref: "/wishes/{wishId}/comments/{commentId}", region: REGION },
   async (event) => {
     const comment = event.data.val();
-    if (!comment || !comment.by || !comment.text) return;
+    if (!comment || !comment.by || (!comment.text && !comment.voiceUrl)) return;
 
     const wishId = event.params.wishId;
     const db = getDatabase();
@@ -88,10 +88,14 @@ exports.onWishCommentCreated = onValueCreated(
     const wishTitle = wishSnap.val() || "eurem Moment";
 
     const partner = otherUser(comment.by);
+    const body = comment.text
+      ? `"${wishTitle}": ${truncate(comment.text, 80)}`
+      : `🎤 Sprachnachricht zu "${wishTitle}"`;
+
     await sendToUser(
       partner,
       `💬 ${comment.by} hat kommentiert`,
-      `"${wishTitle}": ${truncate(comment.text, 80)}`,
+      body,
       "wish-comment"
     );
   }
